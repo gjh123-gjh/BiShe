@@ -1,0 +1,6 @@
+requests
+openai
+python-dotenv
+# optional for local embedding/indexing
+# sentence-transformers
+# faiss-cpu

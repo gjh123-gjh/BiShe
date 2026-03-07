@@ -1,0 +1,2 @@
+# 创建一个空的 favicon.ico 文件
+touch public/favicon.ico
