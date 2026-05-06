@@ -6,16 +6,23 @@
 
     <el-container class="main-container">
       <el-aside width="30%" class="qa-section">
-        <QAChat 
+        <QAChat
           @select-entity="handleSelectEntity"
+          @focus-evidence="handleEvidenceFocus"
         />
       </el-aside>
 
       <el-main class="graph-section">
         <KnowledgeGraph
           ref="knowledgeGraph"
-          :graph-data="graphData"
+          v-model:include-one-hop-neighbors="qaIncludeOneHop"
+          :graph-data="displayGraphData"
+          :primary-node-ids="qaPrimaryNodeIds"
+          :subgraph-active="qaSubgraphActive"
+          :evidence-focus-node-ids="evidenceFocusNodeIds"
           @node-click="handleNodeClick"
+          @restore-full-graph="restoreFullGraph"
+          @clear-evidence-focus="evidenceFocusNodeIds = []"
         />
       </el-main>
 
@@ -27,7 +34,7 @@
 </template>
 
 <script>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import QAChat from '@/components/QAChat.vue'
 import KnowledgeGraph from '@/components/KnowledgeGraph.vue'
 import EntityDetail from '@/components/EntityDetail.vue'
@@ -45,6 +52,63 @@ export default {
     const graphData = ref({ nodes: [], edges: [] })
     const selectedEntity = ref(null)
     const knowledgeGraph = ref(null)
+
+    /** 问答命中实体 ID（与图谱节点 id 对齐，用于子图与高亮） */
+    const qaPrimaryNodeIds = ref([])
+    const qaSubgraphActive = ref(false)
+    /** 子图是否包含与命中节点直接相连的一跳邻居 */
+    const qaIncludeOneHop = ref(true)
+    /** 点击证据后在图中仅强调的节点 */
+    const evidenceFocusNodeIds = ref([])
+
+    const idKey = (id) => (id === undefined || id === null ? '' : String(id))
+
+    const displayGraphData = computed(() => {
+      const raw = graphData.value
+      if (!qaSubgraphActive.value || qaPrimaryNodeIds.value.length === 0) {
+        return raw
+      }
+      const seed = new Set(qaPrimaryNodeIds.value.map(idKey))
+      let visible = new Set(seed)
+      if (qaIncludeOneHop.value) {
+        for (const e of raw.edges || []) {
+          const s = typeof e.source === 'object' ? e.source.id : e.source
+          const t = typeof e.target === 'object' ? e.target.id : e.target
+          const sk = idKey(s)
+          const tk = idKey(t)
+          if (seed.has(sk)) visible.add(tk)
+          if (seed.has(tk)) visible.add(sk)
+        }
+      }
+      const nodes = (raw.nodes || []).filter((n) => visible.has(idKey(n.id)))
+      const nodeKeys = new Set(nodes.map((n) => idKey(n.id)))
+      const edges = (raw.edges || []).filter((e) => {
+        const s = typeof e.source === 'object' ? e.source.id : e.source
+        const t = typeof e.target === 'object' ? e.target.id : e.target
+        return nodeKeys.has(idKey(s)) && nodeKeys.has(idKey(t))
+      })
+      return { nodes, edges }
+    })
+
+    const restoreFullGraph = () => {
+      qaSubgraphActive.value = false
+      qaPrimaryNodeIds.value = []
+      qaIncludeOneHop.value = true
+      evidenceFocusNodeIds.value = []
+      nextTick(() => {
+        knowledgeGraph.value?.resetZoom?.()
+        knowledgeGraph.value?.fitView?.()
+      })
+    }
+
+    const handleEvidenceFocus = ({ nodeIds }) => {
+      const ids = (nodeIds || []).filter((x) => x !== undefined && x !== null)
+      if (!ids.length) {
+        ElMessage.warning('该条证据未关联到具体图谱节点')
+        return
+      }
+      evidenceFocusNodeIds.value = ids
+    }
 
     // 加载图谱数据
     const loadGraphData = async () => {
@@ -161,25 +225,37 @@ export default {
       }
     }
 
-    // 处理实体选择（来自问答）
-    // 处理实体选择（来自问答）
-    const handleSelectEntity = (entity, nodeIds) => {
+    const handleSelectEntity = (payload) => {
+      const { entity, nodeIds } = payload || {}
       console.log('🎯 实体选择事件:', entity, '节点IDs:', nodeIds)
-      
+
+      const ids = (nodeIds && nodeIds.length > 0)
+        ? nodeIds
+        : (entity && entity.id != null ? [entity.id] : [])
+
+      qaPrimaryNodeIds.value = ids
+      evidenceFocusNodeIds.value = []
+
+      if (ids.length > 0) {
+        const focus = new Set(ids.map(idKey))
+        const matched = (graphData.value.nodes || []).filter((n) => focus.has(idKey(n.id)))
+        if (matched.length === 0) {
+          ElMessage.warning('当前图谱中未找到回答涉及的实体节点，已保持全图展示')
+          qaSubgraphActive.value = false
+        } else {
+          qaSubgraphActive.value = true
+        }
+      } else {
+        qaSubgraphActive.value = false
+      }
+
       if (entity) {
         handleNodeClick(entity)
       }
-      
-      // 如果有图谱实例，高亮节点
-      if (knowledgeGraph.value && knowledgeGraph.value.highlightNodes) {
-        if (nodeIds && nodeIds.length > 0) {
-          console.log('高亮多个节点:', nodeIds)
-          knowledgeGraph.value.highlightNodes(nodeIds)
-        } else if (entity) {
-          console.log('高亮单个节点:', entity.id)
-          knowledgeGraph.value.highlightNodes([entity.id])
-        }
-      }
+
+      nextTick(() => {
+        knowledgeGraph.value?.fitView?.()
+      })
     }
 
     // 组件挂载时加载数据
@@ -190,10 +266,17 @@ export default {
 
     return {
       graphData,
+      displayGraphData,
+      qaPrimaryNodeIds,
+      qaSubgraphActive,
+      qaIncludeOneHop,
+      evidenceFocusNodeIds,
       selectedEntity,
       knowledgeGraph,
       handleNodeClick,
-      handleSelectEntity
+      handleSelectEntity,
+      handleEvidenceFocus,
+      restoreFullGraph
     }
   }
 }
@@ -238,7 +321,7 @@ export default {
 }
 
 .graph-section {
-  background-color: #1a1a2e;
+  background-color: #ffffff;
   padding: 0;
   overflow: hidden;
   height: 100%;

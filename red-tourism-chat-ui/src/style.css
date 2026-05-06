@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+:root {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-color: #FAF9F6;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+#app {
+  width: 100%;
+}
+
+/* 隐藏滚动条但保留滚动功能 */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* 消息入场动画 */
+.message-enter-active {
+  transition: all 0.3s ease-out;
+}
+.message-enter-from {
+  opacity: 0;
+  transform: translateY(20px);
+}

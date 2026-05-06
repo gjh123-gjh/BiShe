@@ -20,12 +20,16 @@ export const fetchGraphData = async () => {
   }
 }
 
-export const askQuestion = async (question, topK = 5) => {
+export const askQuestion = async (question, topK = 5, context = null) => {
   try {
-    const response = await apiClient.post('/qa/ask', {
+    const body = {
       query: question,
       top_k: topK
-    })
+    }
+    if (context != null) {
+      body.context = context
+    }
+    const response = await apiClient.post('/qa/ask', body)
     return response.data
   } catch (error) {
     console.error('提问失败:', error)

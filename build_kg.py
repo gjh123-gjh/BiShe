@@ -59,10 +59,60 @@ def build_graph(preprocessed_json_path):
                 MATCH (x:`红色旅游` {{实体名称: $a}})
                 MATCH (y:`红色旅游` {{实体名称: $b}})
                 MERGE (x)-[r:`{rel_type}` {{原关系: $orig_rel}}]->(y)
+
+                // 为每个实体标签创建name属性的唯一性约束
+                CREATE CONSTRAINT red_venue_name_unique IF NOT EXISTS
+                FOR (n:RedVenue) REQUIRE n.name IS UNIQUE;
+
+                CREATE CONSTRAINT red_figure_name_unique IF NOT EXISTS
+                FOR (n:RedFigure) REQUIRE n.name IS UNIQUE;
+
+                // 为Property节点创建复合约束
+                CREATE CONSTRAINT property_unique IF NOT EXISTS
+                FOR (p:Property) REQUIRE (p.name, p.value) IS UNIQUE;
+
+                // 为常用查询属性创建索引
+                CREATE INDEX red_venue_address IF NOT EXISTS
+                FOR (n:RedVenue) ON (n.address);
+                CREATE INDEX historical_event_year IF NOT EXISTS
+                FOR (n:HistoricalEvent) ON (n.year);
+
+
                 """
                 session.run(cypher_rel, a=a, b=b, orig_rel=rel)
 
+                
+
     print("知识图谱构建完成（已将属性作为节点并创建关系）。")
+
+def import_nodes(session, nodes):
+    for node in nodes:
+        label = node['label']  
+        props = {'name': node['name']}
+        props.update(node.get('simple_properties', {}))
+        session.run(
+            f"MERGE (n:{label} {{name: $name}}) SET n += $props",
+            name=node['name'], props=props
+        )
+
+def import_relations(session, relations):
+    for rel in relations:
+        start_name = rel['start']
+        end_name = rel['end']
+        rel_type = rel['type']
+        session.run(
+            f"MATCH (a {{name: $start_name}}), (b {{name: $end_name}}) "
+            f"MERGE (a)-[r:{rel_type}]->(b)",
+            start_name=start_name, end_name=end_name
+        )
+
+def import_property(session, entity_name, prop_name, prop_value):
+    session.run("""
+        MERGE (p:Property {name: $prop_name, value: $prop_value})
+        WITH p
+        MATCH (e:RedTourism {name: $entity_name})
+        MERGE (e)-[:HAS_PROPERTY]->(p)
+    """, prop_name=prop_name, prop_value=prop_value, entity_name=entity_name)
 
 
 if __name__ == '__main__':

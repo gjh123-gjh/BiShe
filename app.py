@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json
+import re
 from pathlib import Path
 import os
 from dotenv import load_dotenv
@@ -30,6 +31,131 @@ def load_kg_data():
         print(f"✓ 加载了 {len(rels)} 条关系")
     
     return nodes, rels
+
+
+def entities_from_evidence_hits(hits, nodes):
+    """从各类 evidence 命中里收集图谱实体 ID（关系、扩展、推理命中也纳入，便于子图高亮）"""
+    node_by_id = {n['id']: n for n in nodes}
+    out = []
+    seen = set()
+
+    def add_node(n):
+        if not n or n.get('id') in seen:
+            return
+        props = n.get('props') or {}
+        name = props.get('名称') or props.get('实体名称')
+        if not name:
+            return
+        seen.add(n['id'])
+        labels = n.get('labels') or ['未知']
+        out.append({
+            'id': n['id'],
+            'name': name,
+            'type': labels[0] if labels else '未知'
+        })
+
+    def add_node_id(nid):
+        if nid is None:
+            return
+        add_node(node_by_id.get(nid))
+
+    for hit in hits or []:
+        src = hit.get('source')
+        od = hit.get('original_data')
+        if od:
+            if src in ('knowledge_graph_node', 'knowledge_graph_expanded', 'knowledge_graph_inference'):
+                add_node(od)
+            elif src == 'knowledge_graph_relation':
+                for nid in (od.get('source'), od.get('target')):
+                    add_node_id(nid)
+        hid = hit.get('id')
+        if isinstance(hid, str):
+            m = re.match(r'^node_(\d+)$', hid.strip(), re.I)
+            if m:
+                add_node_id(int(m.group(1)))
+    return out
+
+
+def augment_entities_from_free_text(text, nodes, existing):
+    """
+    从回答正文、证据串中识别图谱里存在的节点全称（含【】[] 内片段、顿号分隔），
+    用于 LLM 回答里点名了场馆但 evidence_hits 未带 structured id 时仍能高亮子图。
+    """
+    if not text or not nodes:
+        return []
+    seen = {e['id'] for e in (existing or []) if e.get('id') is not None}
+    out = []
+
+    def try_add_node(n):
+        if not n or n.get('id') in seen:
+            return
+        props = n.get('props') or {}
+        name = props.get('名称') or props.get('实体名称')
+        if not name:
+            return
+        seen.add(n['id'])
+        labels = n.get('labels') or ['未知']
+        out.append({
+            'id': n['id'],
+            'name': name,
+            'type': labels[0] if labels else '未知'
+        })
+
+    indexed = []
+    for n in nodes:
+        props = n.get('props') or {}
+        name = props.get('名称') or props.get('实体名称')
+        if name and len(name) >= 2:
+            indexed.append((len(name), name, n))
+    indexed.sort(key=lambda x: -x[0])
+
+    for _ln, name, node in indexed:
+        if name in text:
+            try_add_node(node)
+
+    for m in re.finditer(r'[【\[]\s*([^\]】]+?)\s*[】\]]', text):
+        frag = m.group(1).strip()
+        if len(frag) < 2:
+            continue
+        for _ln, name, node in indexed:
+            if frag in name or name in frag:
+                try_add_node(node)
+                break
+
+    for line in text.splitlines():
+        if '：' not in line and ':' not in line:
+            continue
+        if not re.search(r'场馆|景点|路线|涉及|推荐|博物馆|纪念|陵|塔|园|址|监狱|旧址', line):
+            continue
+        tail = line
+        if '：' in line:
+            tail = line.split('：', 1)[-1]
+        elif ':' in line:
+            tail = line.split(':', 1)[-1]
+        for part in re.split(r'[、，,→]+', tail):
+            part = re.sub(r'^[│\s├└─·]+|[│\s├└─·]+$', '', part).strip()
+            if len(part) < 3:
+                continue
+            for _ln, name, node in indexed:
+                if part in name or name in part:
+                    try_add_node(node)
+                    break
+
+    return out
+
+
+def merge_entity_lists(primary, extra):
+    seen = set()
+    out = []
+    for e in (primary or []) + (extra or []):
+        if not e or e.get('id') is None:
+            continue
+        if e['id'] in seen:
+            continue
+        seen.add(e['id'])
+        out.append(e)
+    return out
+
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
@@ -120,7 +246,7 @@ def ask_question():
     try:
         data = request.json
         query = data.get('query')
-        top_k = data.get('top_k', 5)
+        top_k = data.get('top_k', 10)
         context = data.get('context', {})  # 获取上下文
         
         print(f"📝 收到问题: {query}")
@@ -137,42 +263,45 @@ def ask_question():
                 client = DeepSeekClient(api_key=api_key)
                 pipeline = QAPipeline(client)
                 
-                # 如果有上下文，增强查询
+                # 如果有上下文，增强查询（追问、代词、未再写出实体名时绑定上一话题实体）
                 enhanced_query = query
                 if context and context.get('lastEntity'):
                     last_entity = context.get('lastEntity')
-                    entity_name = last_entity.get('name') or last_entity.get('props', {}).get('名称')
-                    
-                    # 检查是否是指代性问题
+                    entity_name = (
+                        last_entity.get('name')
+                        or (last_entity.get('props') or {}).get('名称')
+                        or (last_entity.get('props') or {}).get('实体名称')
+                    )
                     pronouns = ['他', '她', '它', '其', '这个', '那个', '这里', '那里']
-                    if any(p in query for p in pronouns) and entity_name:
-                        # 构建更精确的查询
+                    followup_markers = (
+                        '什么', '哪些', '怎么', '为何', '为什么', '干过', '做过', '事迹', '生平',
+                        '介绍', '还有', '另外', '哪年', '在哪', '什么时候', '多大', '谁', '如何'
+                    )
+                    has_pronoun = any(p in query for p in pronouns)
+                    looks_followup = any(m in query for m in followup_markers)
+                    name_missing = entity_name and (entity_name not in query)
+                    if entity_name and name_missing and (has_pronoun or looks_followup):
                         enhanced_query = f"{entity_name} {query}"
-                        print(f"🔄 查询增强: {enhanced_query}")
+                        print(f"🔄 查询增强(上下文实体): {enhanced_query}")
                 
                 # 执行问答
                 result = pipeline.answer(
                     query=enhanced_query,
                     top_k=top_k,
                     use_deepseek_chat=True,
-                    expand_depth=1
+                    expand_depth=2
                 )
                 
-                # 从证据中提取实体
-                entities = []
-                for hit in result.get('evidence_hits', []):
-                    if hit.get('source') == 'knowledge_graph_node':
-                        original = hit.get('original_data')
-                        if original:
-                            entity_name = original.get('props', {}).get('名称') or original.get('props', {}).get('实体名称')
-                            if entity_name:
-                                entities.append({
-                                    'id': original.get('id'),
-                                    'name': entity_name,
-                                    'type': original.get('labels', ['未知'])[0]
-                                })
-                
-                result['entities'] = entities
+                nodes_kg, _ = load_kg_data()
+                base_entities = entities_from_evidence_hits(result.get('evidence_hits'), nodes_kg)
+                blob = '\n'.join([
+                    str(result.get('answer') or ''),
+                    str(result.get('evidence_text') or ''),
+                ])
+                for h in result.get('evidence_hits') or []:
+                    blob += '\n' + str(h.get('text') or '')
+                extra = augment_entities_from_free_text(blob, nodes_kg, base_entities)
+                result['entities'] = merge_entity_lists(base_entities, extra)
                 return jsonify(result)
             else:
                 # 如果没有API key，返回模拟数据（基于知识图谱）

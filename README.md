@@ -1,154 +1,70 @@
-# 大连红色旅游知识图谱系统
+# 大连红色旅游知识图谱与智能问答系统
 
-本项目旨在搭建一个面向**大连红色旅游**场景的知识图谱与智能问答系统。通过预处理红色旅游相关数据，构建图谱并提供可视化与在线问答服务，方便用户了解红色场馆、人物、展品、历史事件、旅游服务等信息。
-
----
-
-## 核心功能
-
-- **知识图谱构建**：从 CSV / JSON 数据抽取三元组，清洗、去重并导入 Neo4j。
-- **图谱可视化**：基于 D3.js 与 ECharts 展示实体和关系网络。
-- **AI 问答**：结合 DeepSeek 向量检索和预训练模型，实现自然语言问答。
-- **REST API**：Flask 提供图谱数据查询、问答接口。
-- **前端展示**：Vue3 + Element Plus 实现交互式仪表盘、问答页面和实体详情。
+本项目旨在构建一个针对**大连红色旅游**资源的知识图谱，并结合大语言模型（DeepSeek）实现智能问答（RAG）。
 
 ---
 
-## 技术栈与理论
+## 📂 项目目录结构与文件功能清单
 
-| 层级 | 技术 | 说明 |
-|------|------|------|
-| 数据存储 | [Neo4j](https://neo4j.com) | 图数据库，适合存储实体-关系网络。 |
-| 后端 | Python 3.10+，Flask | 提供 API 和图谱构建脚本。 |
-| AI 服务 | DeepSeek 向量检索 | 将文本嵌入，配合预训练模型进行问答。 |
-| 前端 | Vue3、Element Plus、D3.js、ECharts | 构建SPA，呈现图谱和问答界面。 |
-| 数据处理 | pandas、networkx 等 | 对 CSV/JSON 数据做预处理、去重与三元组生成。 |
-| 部署工具 | requirements.txt、package.json | 管理 Python/Node 依赖。 |
+### 1. 核心业务流水线 (根目录)
 
-### 知识图谱简介
+| 文件名 | 类型 | 功能描述 |
+| :--- | :--- | :--- |
+| `app.py` | 后端 | **核心服务**：基于 Flask 的 API 后端，提供图谱数据获取与 AI 问答接口。 |
+| `build_kg.py` | 构建 | **核心导入**：将预处理后的 JSON 数据批量导入 Neo4j 数据库。 |
+| `qa_pipeline.py` | AI | **核心问答**：问答系统的 RAG 流水线，负责检索向量库并调用 AI 生成回答。 |
+| `preprocessing.py` | 预处理 | **数据转化**：将手工抽取的 `.txt` 三元组文件转化为 `大连红色旅游三元组_预处理.json`。 |
+| `.env` | 配置 | **环境变量**：存放 API Key（OpenAI/DeepSeek）及数据库密码。 |
 
-知识图谱由 **节点（实体）** 和 **关系（边）** 组成，本项目的实体类别包括：
-- 红色场馆
-- 红色人物
-- 红色展品
-- 历史事件
-- 旅游服务
+### 2. 数据库与知识图谱工具 (根目录)
 
-三元组（`subject`‑`predicate`‑`object`）数据来自 `大连红色旅游_节点.csv`、`大连红色旅游_关系.csv` 等，经 `build_kg.py` 预处理后生成 JSON 并导入 Neo4j。`export_kg.py` 可用于从数据库导出。
+| 文件名 | 类型 | 功能描述 |
+| :--- | :--- | :--- |
+| `Neo4j_red.py` | 工具 | Neo4j 数据库驱动的封装模块，供其他脚本调用。 |
+| `Neo4j_reset.py` | 工具 | **数据库重置**：一键清空数据库中的所有节点与关系（请谨慎使用）。 |
+| `export_kg.py` | 工具 | 将图数据库中的数据导出为本地备份。 |
+| `strong_merge.py` | 优化 | **高级合并**：使用 Neo4j APOC 插件或手动逻辑合并名称相近的重复节点。 |
+| `dedupe_and_sentence.py`| 优化 | **去重与语效**：实体去重，并生成可用于训练或展示的自然语言描述句子。 |
+| `node.py` | 产出 | 将处理好的 JSON 数据转换为用于外部导入的 `.csv` 节点与关系文件。 |
 
-### AI 问答原理
+### 3. AI 服务与演示 (根目录)
 
-问答流程见 `qa_pipeline.py`：
-1. 用户输入转向量（`embed_and_index.py` 建立索引）。
-2. 使用 DeepSeek 向量检索找到相关文本段落。
-3. 通过大模型生成回答（`deepseek_client.py` 为封装的 API 客户端）。
-4. 支持离线演示（`qa_demo_offline.py`、`qa_complete_demo.py`）。
+| 文件名 | 类型 | 功能描述 |
+| :--- | :--- | :--- |
+| `deepseek_client.py` | API | DeepSeek 官方 API 的封装客户端。 |
+| `embed_and_index.py` | 向量化 | 对旅游文本进行 Embedding 并建立 FAISS 索引，支持语义搜索。 |
+| `qa_demo_offline.py` | 演示 | 离线版本的问答测试脚本，无需启动 Web 服务。 |
+| `API.py` | 备份 | 项目早期的 API 定义，目前作为代码参考保留。 |
+
+### 4. 辅助脚本目录 (`/scripts`)
+该目录主要存放数据采集与早期的知识抽取逻辑。
+
+| 文件名 | 功能描述 |
+| :--- | :--- |
+| `spider_red_tourism.py` | 基于 Python 的爬虫，用于抓取大连相关的红色旅游网页信息。 |
+| `data_preprocessing.py` | 清洗爬虫抓取的原始 CSV 文本，去除广告、HTML 噪声等。 |
+| `entity_extraction.py` | 从清洗后的文本中识别并抽取红色场馆、人物等实体。 |
+| `relationship_extraction.py` | 从文本中识别实体间的关联关系（如：人物-出生地-地点）。 |
+| `knowledge_alignment.py` | 知识对齐工具，消除不同来源、不同称呼下的同一实体冲突。 |
+
+### 5. 前端展示项目 (`/red-tourism-vue`)
+基于 Vue3 + Element Plus 的单页应用（SPA）。
+
+- `src/components/KnowledgeGraph.vue`: 基于 D3.js 的力导向图可视化。
+- `src/components/QAChat.vue`: 聊天对话界面组件。
+- `src/views/Dashboard.vue`: 主仪表盘面板。
 
 ---
 
-## 目录结构
-
-### 后端核心组件
-
-**数据处理层**
-- `大连红色旅游三元组_预处理.json`：预处理后的三元组数据源（主输入）
-- `preprocessing.py`：原始数据预处理脚本，负责数据清洗、标准化并导出JSON格式
-- `node.py`：从预处理JSON生成实体/关系CSV文件
-- `dedupe_and_sentence.py`：数据去重与合并工具，支持自然语言句子生成
-- `strong_merge.py`：高级节点合并工具（APOC优先策略）
-
-**知识图谱层**
-- `build_kg.py`：将预处理数据导入Neo4j，创建节点、标签和关系
-- `Neo4j_red.py`：Neo4j数据库连接封装模块
-- `Neo4j_reset.py`：数据库重置工具
-- `export_kg.py`：知识图谱数据导出工具
-
-**AI问答层**
-- `qa_pipeline.py`：智能问答核心流程，集成DeepSeek检索器
-- `deepseek_client.py`：DeepSeek API客户端封装
-- `embed_and_index.py`：文本嵌入和索引构建
-- `qa_demo_offline.py`、`qa_complete_demo.py`：问答演示脚本
-
-**Web服务层**
-- `app.py`：Flask后端API服务，提供RESTful接口
-- `API.py`：额外的API接口定义
-
-### 前端组件 (red-tourism-vue)
-
-**核心页面**
-- `Dashboard.vue`：主控制面板，整合问答、图谱和详情展示
-
-**可视化组件**
-- `KnowledgeGraph.vue`：基于D3.js的知识图谱可视化
-- `QAChat.vue`：智能问答交互界面
-- `EntityDetail.vue`：实体详细信息展示
-- `NodeCard.vue`、`RelationList.vue`：基础UI组件
-
-**服务层**
-- `api.js`：前后端API通信封装
-- `graphData.js`：图谱数据处理工具
-- `store/index.js`：Vue状态管理
-
-### 配置与工具文件
-
-- `package.json`：Node.js依赖配置
-- `.env`：环境变量配置文件
-- `requirements.txt`：Python依赖列表
-- `vue.config.js`：Vue CLI配置
 
 
+## 🚀 快速启动
 
-## 功能特性
-
-### 🔧 数据处理
-- 自动化数据清洗和标准化
-- 智能去重和实体合并
-- 多格式数据导出（JSON/CSV）
-
-### 📊 知识图谱
-- Neo4j图数据库存储
-- 实体关系可视化展示
-- 支持多标签分类管理
-
-### 🤖 智能问答
-- 基于检索增强生成（RAG）的问答系统
-- DeepSeek大模型集成
-- 自然语言理解与回答
-
-### 🖥️ 可视化界面
-- 响应式Web前端设计
-- 交互式图谱探索
-- 实时问答对话
-
-## 快速开始
-
-### 环境准备
-
-```bash
-# 安装Python依赖
-pip install -r requirements.txt
-
-# 安装前端依赖
-cd red-tourism-vue
-npm install
-
-
-
-# 1. 启动后端API服务
-python app.py
-
-# 2. 启动前端开发服务器
-cd red-tourism-vue
-npm run serve
-
-
-
-# 1. 预处理原始数据
-python preprocessing.py
-
-# 2. 构建知识图谱
-python build_kg.py
-
-# 3. 验证数据导入
-python export_kg.py
-```
+1.  **数据就绪**：
+    `python preprocessing.py` (生成 JSON) -> `python build_kg.py` (导入数据库)。
+2.  **启动后端**：
+    `python app.py` (默认端口 5000)。
+3.  **启动前端**：
+    `cd red-tourism-chat-ui && npm run dev`。
+4.  **智能问答**：
+    确保 `.env` 中有有效的 DeepSeek API Key。
